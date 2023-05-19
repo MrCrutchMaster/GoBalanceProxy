@@ -1,0 +1,18 @@
+debug: true
+
+server:
+  listen_addr: "127.0.0.1:8000"
+  http_read_timeout: 100ms
+  http_write_timeout: 100ms
+  max_conn: 20
+
+proxy:
+    -
+      server: http://127.0.0.1:3001
+      probe: /probe
+    -
+      server: http://127.0.0.1:3002
+      probe: /probe
+
+
+
