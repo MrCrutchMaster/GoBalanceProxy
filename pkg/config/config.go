@@ -10,11 +10,11 @@ import (
 
 var configPath = flag.String("c", "/usr/local/etc/conf.yaml", "config file path")
 
-type ProxyConf struct {
+type DestServerConf struct {
 	Server string `yaml:"server"`
 	Probe  string `yaml:"probe"`
 }
-type HTTPServerConf struct {
+type BalanceProxyConf struct {
 	ListenAddr   string        `yaml:"listen_addr"`
 	ReadTimeout  time.Duration `yaml:"http_read_timeout"`
 	WriteTimeout time.Duration `yaml:"http_write_timeout"`
@@ -22,9 +22,9 @@ type HTTPServerConf struct {
 }
 
 type Config struct {
-	Debug bool            `yaml:"debug"`
-	HTTP  *HTTPServerConf `yaml:"server"`
-	Proxy []*ProxyConf    `yaml:"proxy"`
+	Debug        bool              `yaml:"debug"`
+	BalanceProxy *BalanceProxyConf `yaml:"balance_proxy"`
+	DestServer   []*DestServerConf `yaml:"destination_server"`
 }
 
 func GetConfig() (Config, error) {

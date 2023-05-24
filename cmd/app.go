@@ -38,7 +38,7 @@ func NewGoBalanceProxy(conf *config.Config) *GoBalanceProxy {
 	log.Info().Msg("GoBalanceProxy init: started")
 
 	// http server init
-	srv := server.NewHTTPServer(conf.HTTP, conf.Proxy)
+	srv := server.NewHTTPServer(conf.BalanceProxy, conf.DestServer)
 	log.Info().Msg("GoBalanceProxy init: finished")
 	return &GoBalanceProxy{
 		conf:   conf,
@@ -53,7 +53,7 @@ func Finalize(s *server.Srv) {
 	})
 	err := s.Srv.Shutdown(context.Background())
 	if err != nil {
-		log.Fatal().Err(err).Msg("HTTP server Shutdown")
+		log.Fatal().Err(err).Msg("BalanceProxy server Shutdown")
 	}
 }
 

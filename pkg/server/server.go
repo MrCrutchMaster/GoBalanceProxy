@@ -21,60 +21,110 @@ type Srv struct {
 	Stopper context.CancelFunc
 	logger  *zerolog.Logger
 
-	httpConf  *config.HTTPServerConf
-	proxyConf []*config.ProxyConf
+	httpClient       *http.Client
+	balanceProxyConf *config.BalanceProxyConf
+	destSrvConf      []*config.DestServerConf
+	destSrvCount     int
 }
 
 var (
-	ErrSomeProblem = errors.New("SomeProblem")
+	ErrSomeProblem   = errors.New("SomeProblem")
+	ErrSelectDestSrv = errors.New("can't select destination server")
 )
 
-func (s *Srv) baseHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(200)
-	_, err := w.Write([]byte("Ok"))
+func (s *Srv) checkDestServerHealth(destSrv *config.DestServerConf) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	endpoint := fmt.Sprintf("%s%s", destSrv.Server, destSrv.Probe)
+	checkRequest, err := http.NewRequestWithContext(ctx, "GET", endpoint, bytes.NewReader([]byte("")))
 	if err != nil {
-		fmt.Println(err)
+		return false, err
 	}
-	dstSrv := s.proxyConf[rand.Intn(len(s.proxyConf))]
+	resp, err := s.httpClient.Do(checkRequest)
+	if err != nil {
+		return false, err
+	}
+	fmt.Println("checkDestServerHealth: err", err)
+	fmt.Println("checkDestServerHealth: resp", resp)
+	fmt.Println("checkDestServerHealth: StatusCode", resp.StatusCode)
+	if resp.StatusCode == 200 {
+		return true, nil
+	}
+	return false, nil
+}
+func (s *Srv) selectDestServer() (*config.DestServerConf, error) {
+	for _, _ = range s.destSrvConf {
+		srv := s.destSrvConf[rand.Intn(s.destSrvCount)]
+		isOk, err := s.checkDestServerHealth(srv)
+		if isOk && err == nil {
+			return srv, nil
+		}
+	}
 
-	host := r.Host
-	header := r.Header
-	method := r.Method
-	uri := r.RequestURI
-	queryString := r.URL.Query()
-	body, err := io.ReadAll(r.Body)
+	return nil, fmt.Errorf("selectDestServer: %w", ErrSelectDestSrv)
+}
+
+func (s *Srv) sendRequest(origReq *http.Request) (*http.Response, error) {
+	dstSrv, err := s.selectDestServer()
+	if err != nil {
+		return nil, err
+	}
+	host := origReq.Host
+	header := origReq.Header
+	method := origReq.Method
+	uri := origReq.RequestURI
+	queryString := origReq.URL.Query()
+	body, err := io.ReadAll(origReq.Body)
+	if err != nil {
+		return nil, err
+	}
 
 	endpoint := fmt.Sprintf("%s%s", dstSrv.Server, uri)
 	fmt.Println(dstSrv)
 	fmt.Println(endpoint)
 	fmt.Println(host, method, uri, queryString)
 
-	httpCli := &http.Client{
-		Timeout: 1 * time.Second,
-		Transport: &http.Transport{
-			MaxConnsPerHost: 256,
-			MaxIdleConns:    10,
-			IdleConnTimeout: time.Second * 15,
-		}}
-	fmt.Println(httpCli)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	proxyRequest, err := http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(body))
 	if err != nil {
-		fmt.Println(err)
+		return nil, err
 	}
-	fmt.Println(proxyRequest)
 	proxyRequest.Header = header
 	proxyRequest.Host = host
-	resp, err := httpCli.Do(proxyRequest)
+	resp, err := s.httpClient.Do(proxyRequest)
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+func (s *Srv) baseHandler(w http.ResponseWriter, r *http.Request) {
+	resp, err := s.sendRequest(r)
+	if err != nil {
+		fmt.Println(err)
+		w.WriteHeader(200)
+		_, err = w.Write([]byte(fmt.Sprintf("error: %s", err)))
+		return
+	}
+
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		fmt.Println(err)
 	}
-	b, err := io.ReadAll(resp.Body)
+
+	fmt.Println("resp headers")
+	for hdr, values := range resp.Header {
+		for _, value := range values {
+			w.Header().Add(hdr, value)
+		}
+	}
+
+	w.WriteHeader(200)
+	_, err = w.Write(body)
 	if err != nil {
 		fmt.Println(err)
 	}
-	fmt.Println(string(b))
+
 }
 
 func (s *Srv) startHTTPServer() {
@@ -89,11 +139,20 @@ func (s *Srv) startHTTPServer() {
 
 	http.HandleFunc("/", s.baseHandler)
 
-	s.logger.Info().Msgf("Srv addr: %s", s.httpConf.ListenAddr)
+	s.logger.Info().Msgf("Srv addr: %s", s.balanceProxyConf.ListenAddr)
+
+	s.httpClient = &http.Client{
+		Timeout: 1 * time.Second, //!TODO
+		Transport: &http.Transport{
+			MaxConnsPerHost: 256,
+			MaxIdleConns:    10,
+			IdleConnTimeout: time.Second * 15,
+		}}
+
 	s.Srv = &http.Server{
-		Addr:         s.httpConf.ListenAddr,
-		ReadTimeout:  s.httpConf.ReadTimeout,
-		WriteTimeout: s.httpConf.WriteTimeout,
+		Addr:         s.balanceProxyConf.ListenAddr,
+		ReadTimeout:  s.balanceProxyConf.ReadTimeout,
+		WriteTimeout: s.balanceProxyConf.WriteTimeout,
 	}
 
 	err := s.Srv.ListenAndServe()
@@ -115,17 +174,18 @@ func (s *Srv) Run() {
 }
 
 func NewHTTPServer(
-	httpConf *config.HTTPServerConf,
-	proxyConf []*config.ProxyConf,
+	balanceProxyConf *config.BalanceProxyConf,
+	destSrvConf []*config.DestServerConf,
 ) *Srv {
 	ctx, cancel := context.WithCancel(context.Background())
 	logger := log.With().Str("me", "HttpServer").Logger()
 	Srv := &Srv{
-		ctx:       ctx,
-		Stopper:   cancel,
-		logger:    &logger,
-		httpConf:  httpConf,
-		proxyConf: proxyConf,
+		ctx:              ctx,
+		Stopper:          cancel,
+		logger:           &logger,
+		balanceProxyConf: balanceProxyConf,
+		destSrvConf:      destSrvConf,
+		destSrvCount:     len(destSrvConf),
 	}
 
 	return Srv

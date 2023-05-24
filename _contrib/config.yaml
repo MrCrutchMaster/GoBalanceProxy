@@ -1,12 +1,12 @@
 debug: true
 
-server:
+balance_proxy:
   listen_addr: "127.0.0.1:8000"
   http_read_timeout: 100ms
   http_write_timeout: 100ms
   max_conn: 20
 
-proxy:
+destination_server:
     -
       server: http://127.0.0.1:3001
       probe: /probe
