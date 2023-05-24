@@ -1,17 +1,31 @@
-debug: true
+debug: false
 
-balance_proxy:
+balancer:
   listen_addr: "127.0.0.1:8000"
-  http_read_timeout: 100ms
-  http_write_timeout: 100ms
-  max_conn: 20
+  http_read_timeout: 5000ms
+  http_write_timeout: 5000ms
+  max_conn: 1000
 
-destination_server:
+checker:
+  total_check_timeout: 20000ms
+  probe_timeout: 4000ms
+  recheck_period: 1000ms
+
+endpoints:
     -
       server: http://127.0.0.1:3001
       probe: /probe
     -
       server: http://127.0.0.1:3002
+      probe: /probe
+    -
+      server: http://127.0.0.1:3003
+      probe: /probe
+    -
+      server: http://127.0.0.1:3004
+      probe: /probe
+    -
+      server: http://127.0.0.1:3005
       probe: /probe
 
 

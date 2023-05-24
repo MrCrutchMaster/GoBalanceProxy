@@ -1,8 +1,9 @@
 package main
 
 import (
+	"GoBalanceProxy/pkg/balancer"
+	"GoBalanceProxy/pkg/checker"
 	"GoBalanceProxy/pkg/config"
-	"GoBalanceProxy/pkg/server"
 	"context"
 	"os"
 	"os/signal"
@@ -15,56 +16,85 @@ import (
 
 func configureLogger(conf *config.Config) {
 	zerolog.TimeFieldFormat = "2006-01-02 15:04:05.000"
-
 	lvl := zerolog.InfoLevel
 	if conf.Debug {
 		lvl = zerolog.DebugLevel
 	}
-
-	hook := zerolog.NewLevelHook()
-	//hook.ErrorHook = zerolog.HookFunc(func(e *zerolog.Event, level zerolog.Level, message string) {
-	//	stats.Increment("log_errors")
-	//})
-	log.Logger = zerolog.New(os.Stdout).Hook(hook).With().Timestamp().Logger()
+	log.Logger = zerolog.New(os.Stdout).With().Timestamp().Logger()
 	zerolog.SetGlobalLevel(lvl)
 }
 
-type GoBalanceProxy struct {
-	conf   *config.Config
-	server *server.Srv
+type App struct {
+	ctx             context.Context //nolint
+	Stopper         context.CancelFunc
+	conf            *config.Config
+	proxy           *balancer.Balancer
+	checker         *checker.Checker
+	activeEndpoints *[]string
+	proxyDoneChan   chan struct{}
+	checkerDoneChan chan struct{}
 }
 
-func NewGoBalanceProxy(conf *config.Config) *GoBalanceProxy {
-	log.Info().Msg("GoBalanceProxy init: started")
+func (app *App) WaitDone() {
+	<-app.ctx.Done()
+	log.Info().Msg("WaitDone: catch done signal")
+	//<-app.proxyDoneChan
+	<-app.checkerDoneChan
+	log.Info().Msg("WaitDone: checker stopped")
+}
 
-	// http server init
-	srv := server.NewHTTPServer(conf.BalanceProxy, conf.DestServer)
-	log.Info().Msg("GoBalanceProxy init: finished")
-	return &GoBalanceProxy{
-		conf:   conf,
-		server: srv,
+func (app *App) Run() {
+	//app.logger.Info().Msg("Run: Start http proxy application")
+	go app.proxy.StartHTTPServer()
+	go app.checker.StartHealthChecker()
+	app.WaitDone()
+	//app.logger.Info().Msg("Run: Stop http proxy application")
+}
+
+func NewApp(conf *config.Config) *App {
+	log.Info().Msg("App init: started")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var activeEndpoints []string
+
+	// http proxy init
+	balanceProxy := balancer.NewBalancer(ctx, conf.Balancer, &activeEndpoints)
+
+	// probe checker init
+	checkerDoneChan := make(chan struct{})
+	probeChecker := checker.NewChecker(ctx, conf.Endpoints, conf.Checker, &activeEndpoints, checkerDoneChan)
+
+	log.Info().Msg("App init: finished")
+	return &App{
+		ctx:             ctx,
+		Stopper:         cancel,
+		conf:            conf,
+		proxy:           balanceProxy,
+		checker:         probeChecker,
+		activeEndpoints: &activeEndpoints,
+		checkerDoneChan: checkerDoneChan,
 	}
 }
 
-func Finalize(s *server.Srv) {
-	s.Stopper()
+func Finalize(app *App) {
+	app.Stopper()
 	go time.AfterFunc(time.Second*30, func() {
 		log.Fatal().Msg("force exit after deadline")
 	})
-	err := s.Srv.Shutdown(context.Background())
+	err := app.proxy.Server.Shutdown(context.Background())
 	if err != nil {
-		log.Fatal().Err(err).Msg("BalanceProxy server Shutdown")
+		log.Fatal().Err(err).Msg("Balancer shutdown")
 	}
 }
 
-func handleSignals(srv *server.Srv) {
+func handleSignals(app *App) {
 	signalChannel := make(chan os.Signal, 1)
 
 	go func() {
 		sig := <-signalChannel
 		log.Warn().Msgf("catch interrupt signal: %v", sig)
 		log.Warn().Msg("Finalizing application")
-		Finalize(srv)
+		Finalize(app)
 	}()
 
 	signal.Notify(signalChannel, syscall.SIGINT, syscall.SIGTERM)
