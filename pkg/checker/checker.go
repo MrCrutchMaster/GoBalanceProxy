@@ -2,13 +2,13 @@ package checker
 
 import (
 	"GoBalanceProxy/pkg/config"
+	"GoBalanceProxy/pkg/endpoints"
 	"bytes"
 	"context"
 	"fmt"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"net/http"
-	"strings"
 	"time"
 )
 
@@ -18,7 +18,7 @@ type Checker struct {
 	endpointsConf   []*config.EndpointsConf
 	checkerConf     *config.CheckerConf
 	httpClient      *http.Client
-	activeEndpoints *[]string
+	activeEndpoints *endpoints.ActiveEndpoints
 	checkerDoneChan chan struct{}
 }
 
@@ -26,7 +26,7 @@ func NewChecker(
 	ctx context.Context,
 	endpointsConf []*config.EndpointsConf,
 	checkerConf *config.CheckerConf,
-	activeEndpoints *[]string,
+	activeEndpoints *endpoints.ActiveEndpoints,
 	checkerDoneChan chan struct{},
 ) *Checker {
 	logger := log.With().Str("me", "ProbeChecker").Logger()
@@ -45,7 +45,7 @@ func NewChecker(
 func (c *Checker) checkEndpointHealth() {
 	ctx, cancel := context.WithTimeout(c.ctx, c.checkerConf.TotalCheckTimeout)
 	defer cancel()
-	activeEndpoints := []string{}
+	var activeEndpoints []endpoints.Endpoint
 	for _, val := range c.endpointsConf {
 		endpoint := fmt.Sprintf("%s%s", val.Server, val.Probe)
 		checkRequest, err := http.NewRequestWithContext(ctx, "GET", endpoint, bytes.NewReader([]byte("")))
@@ -56,7 +56,9 @@ func (c *Checker) checkEndpointHealth() {
 				Err(err)
 			continue
 		}
+		start := time.Now()
 		resp, err := c.httpClient.Do(checkRequest)
+		respTime := time.Now().Sub(start)
 		if err != nil {
 			c.logger.Error().
 				Str("endpoint", endpoint).
@@ -73,10 +75,14 @@ func (c *Checker) checkEndpointHealth() {
 				Err(err)
 			continue
 		}
-		activeEndpoints = append(activeEndpoints, val.Server)
+		endpointStruct := endpoints.Endpoint{
+			Server:   val.Server,
+			RespTime: respTime,
+		}
+		activeEndpoints = append(activeEndpoints, endpointStruct)
 	}
-	*c.activeEndpoints = activeEndpoints
-	c.logger.Debug().Msgf("checkEndpointHealth: %s", strings.Join(*c.activeEndpoints, ","))
+	c.activeEndpoints.WriteEndpoints(activeEndpoints)
+	c.logger.Debug().Msgf("checkEndpointHealth: %s", activeEndpoints)
 }
 
 func (c *Checker) StartHealthChecker() {

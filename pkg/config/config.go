@@ -20,10 +20,11 @@ type EndpointsConf struct {
 	Probe  string `yaml:"probe"`
 }
 type BalancerConf struct {
-	ListenAddr   string        `yaml:"listen_addr"`
-	ReadTimeout  time.Duration `yaml:"http_read_timeout"`
-	WriteTimeout time.Duration `yaml:"http_write_timeout"`
-	MaxConn      int           `yaml:"max_conn"`
+	ListenAddr      string        `yaml:"listen_addr"`
+	ReadTimeout     time.Duration `yaml:"http_read_timeout"`
+	WriteTimeout    time.Duration `yaml:"http_write_timeout"`
+	MaxConn         int           `yaml:"max_conn"`
+	BalanceStrategy string        `yaml:"balance_strategy"`
 }
 
 type Config struct {

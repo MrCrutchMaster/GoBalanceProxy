@@ -6,11 +6,12 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"time"
 )
 
 func handler(i int, resp string, statusCode int) func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
-		//time.Sleep(3000 * time.Millisecond)
+		time.Sleep(49 * time.Millisecond)
 		//fmt.Printf("baseHandler %d %s %s %s\n", i, r.Host, r.Method, r.RequestURI)
 		w.WriteHeader(statusCode)
 		w.Header().Add("My-Header", "my value")
@@ -40,6 +41,5 @@ func main() {
 	go startServer(3003, "NOT OK", 500)
 	go startServer(3004, "NOT OK", 301)
 	go startServer(3005, "OK", 200)
-
 	_ = <-c
 }

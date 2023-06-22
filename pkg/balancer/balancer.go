@@ -2,6 +2,7 @@ package balancer
 
 import (
 	"GoBalanceProxy/pkg/config"
+	"GoBalanceProxy/pkg/endpoints"
 	"GoBalanceProxy/pkg/metrics"
 	"bytes"
 	"context"
@@ -13,7 +14,6 @@ import (
 	"io"
 	"math/rand"
 	"net/http"
-	"strings"
 	"time"
 )
 
@@ -25,8 +25,8 @@ type Balancer struct {
 	limitChan chan struct{}
 
 	httpClient      *http.Client
-	proxyConf       *config.BalancerConf
-	activeEndpoints *[]string
+	balancerConf    *config.BalancerConf
+	activeEndpoints *endpoints.ActiveEndpoints
 }
 
 const (
@@ -42,18 +42,34 @@ func giveErrorResp(err error, statusCode int, w http.ResponseWriter) {
 	w.WriteHeader(statusCode)
 	_, err = w.Write([]byte(fmt.Sprintf("error: %s", err)))
 }
-func (b *Balancer) selectDestServer() (string, error) {
-	l := len(*b.activeEndpoints)
+func (b *Balancer) selectDestServer(strategy string) (string, error) {
+	activeEndpoints := b.activeEndpoints.ReadEndpoints()
+	l := len(activeEndpoints)
 	if l == 0 {
 		return "", fmt.Errorf("selectDestServer: %w", ErrSelectEndpoint)
 	}
-	ind := rand.Intn(l)
-	srv := (*b.activeEndpoints)[ind]
-	return srv, nil
+
+	var ind int
+	switch strategy {
+	case "random":
+		ind = rand.Intn(l)
+	case "fastest":
+		ind = 0
+		fastest := activeEndpoints[ind].RespTime
+		for i, val := range activeEndpoints {
+			if val.RespTime < fastest {
+				ind = i
+			}
+		}
+	default:
+		ind = rand.Intn(l)
+	}
+	srv := (activeEndpoints)[ind]
+	return srv.Server, nil
 
 }
-func (b *Balancer) sendRequest(origReq *http.Request) (*http.Response, error) {
-	endpoint, err := b.selectDestServer()
+func (b *Balancer) sendRequest(origReq *http.Request, strategy string) (*http.Response, error) {
+	endpoint, err := b.selectDestServer(strategy)
 	if err != nil {
 		return nil, err
 	}
@@ -98,12 +114,12 @@ func (b *Balancer) baseHandler(w http.ResponseWriter, r *http.Request) {
 	reqNum := len(b.limitChan)
 	b.limitChan <- struct{}{}
 	defer b.freeChannel()
-	if reqNum >= b.proxyConf.MaxConn {
+	if reqNum >= b.balancerConf.MaxConn {
 		giveErrorResp(ErrRequestLimit, http.StatusTooManyRequests, w)
 		metrics.RequestLimit.Inc()
 		return
 	}
-	resp, err := b.sendRequest(r)
+	resp, err := b.sendRequest(r, b.balancerConf.BalanceStrategy)
 	if err != nil {
 		b.logger.Error().Err(err)
 		giveErrorResp(err, http.StatusBadGateway, w)
@@ -136,14 +152,16 @@ func (b *Balancer) baseHandler(w http.ResponseWriter, r *http.Request) {
 func (b *Balancer) StartHTTPServer() {
 	probe := func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(strings.Join(*b.activeEndpoints, ",")))
+		activeEndpoints := b.activeEndpoints.ReadEndpoints()
+		resp := fmt.Sprintf("%+v", activeEndpoints)
+		_, _ = w.Write([]byte(resp))
 	}
 
 	mux := http.NewServeMux()
 	b.Server = &http.Server{
-		Addr:         b.proxyConf.ListenAddr,
-		ReadTimeout:  b.proxyConf.ReadTimeout,
-		WriteTimeout: b.proxyConf.WriteTimeout,
+		Addr:         b.balancerConf.ListenAddr,
+		ReadTimeout:  b.balancerConf.ReadTimeout,
+		WriteTimeout: b.balancerConf.WriteTimeout,
 		Handler:      mux,
 	}
 
@@ -160,7 +178,7 @@ func (b *Balancer) StartHTTPServer() {
 func NewBalancer(
 	ctx context.Context,
 	proxyConf *config.BalancerConf,
-	activeEndpoints *[]string,
+	activeEndpoints *endpoints.ActiveEndpoints,
 ) *Balancer {
 	logger := log.With().Str("me", "Balancer").Logger()
 	logger.Info().Msgf("Balancer addr: %s", proxyConf.ListenAddr)
@@ -176,7 +194,7 @@ func NewBalancer(
 		ctx:             ctx,
 		logger:          &logger,
 		limitChan:       limitChan,
-		proxyConf:       proxyConf,
+		balancerConf:    proxyConf,
 		activeEndpoints: activeEndpoints,
 		httpClient:      httpClient,
 	}

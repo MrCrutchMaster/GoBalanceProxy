@@ -4,6 +4,7 @@ import (
 	"GoBalanceProxy/pkg/balancer"
 	"GoBalanceProxy/pkg/checker"
 	"GoBalanceProxy/pkg/config"
+	"GoBalanceProxy/pkg/endpoints"
 	"context"
 	"os"
 	"os/signal"
@@ -30,7 +31,6 @@ type App struct {
 	conf            *config.Config
 	proxy           *balancer.Balancer
 	checker         *checker.Checker
-	activeEndpoints *[]string
 	proxyDoneChan   chan struct{}
 	checkerDoneChan chan struct{}
 }
@@ -55,7 +55,7 @@ func NewApp(conf *config.Config) *App {
 	log.Info().Msg("App init: started")
 
 	ctx, cancel := context.WithCancel(context.Background())
-	var activeEndpoints []string
+	activeEndpoints := endpoints.ActiveEndpoints{}
 
 	// http proxy init
 	balanceProxy := balancer.NewBalancer(ctx, conf.Balancer, &activeEndpoints)
@@ -71,7 +71,6 @@ func NewApp(conf *config.Config) *App {
 		conf:            conf,
 		proxy:           balanceProxy,
 		checker:         probeChecker,
-		activeEndpoints: &activeEndpoints,
 		checkerDoneChan: checkerDoneChan,
 	}
 }
