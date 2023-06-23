@@ -1,16 +1,16 @@
-debug: true
+debug: false
 
 balancer:
   listen_addr: "127.0.0.1:8000"
   http_read_timeout: 5000ms
   http_write_timeout: 5000ms
   max_conn: 1000
-  balance_strategy: fastest
+  balance_strategy: random
 
 checker:
   total_check_timeout: 20000ms
   probe_timeout: 4000ms
-  recheck_period: 10000ms
+  recheck_period: 5000ms
 
 endpoints:
     -
